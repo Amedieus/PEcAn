@@ -109,43 +109,24 @@ sda.enkf_local <- function(settings,
   ###-------------------------------------------------------------------###
   ### check dates before data assimilation                              ###
   ###-------------------------------------------------------------------###----  
-  #Filter observation dates to SDA bounds
-  start.cut <- lubridate::ymd_hms(settings$state.data.assimilation$start.date, truncated = 3)
-  # Start.year <- (lubridate::year(settings$state.data.assimilation$start.date))
-  # End.year <- lubridate::year(settings$state.data.assimilation$end.date) # dates that assimilations will be done for - obs will be subsetted based on this
-  # assim.sda <- Start.year:End.year
-  # obs.mean <- obs.mean[sapply(lubridate::year(names(obs.mean)), function(obs.year) obs.year %in% (assim.sda))] #checks obs.mean dates against assimyear dates
-  # obs.cov <- obs.cov[sapply(lubridate::year(names(obs.cov)), function(obs.year) obs.year %in% (assim.sda))] #checks obs.cov dates against assimyear dates
-  if (is.na(start.cut)) {
-    start.cut <- as.POSIXct(as.Date(settings$state.data.assimilation$start.date), tz = "UTC")
-  }
-  end.cut <- lubridate::ymd_hms(settings$state.data.assimilation$end.date, truncated = 3)
-  if (is.na(end.cut)) {
-    end.cut <- as.POSIXct(as.Date(settings$state.data.assimilation$end.date), tz = "UTC")
-  }
-  #checking that there are dates in obs.mean and adding midnight as the time
-  obs.times <- names(obs.mean)
-  obs.times.POSIX <- lubridate::ymd_hms(obs.times)
-  for (i in seq_along(obs.times)) {
-    if (is.na(obs.times.POSIX[i])) {
-      if (is.na(lubridate::ymd(obs.times[i]))) {
-        PEcAn.logger::logger.warn("Error: no dates associated with observations")
-      } else {
-        ### Data does not have time associated with dates 
-        ### Adding 12:59:59PM assuming next time step starts one second later
-        # PEcAn.logger::logger.warn("Pumpkin Warning: adding one minute before midnight time assumption to dates associated with data")
-        # obs.times.POSIX[i] <- lubridate::ymd_hms(paste(obs.times[i], "23:59:59"))
-        # If dates are provided without times, standardize to 00:00:00 UTC.
-        obs.times.POSIX[i] <- lubridate::ymd_hms(paste(obs.times[i], "00:00:00"))
-      }
-    }
-  }
-  obs.times <- obs.times.POSIX
-  keep_obs <- which(obs.times >= start.cut & obs.times <= end.cut)
-  obs.times <- obs.times[keep_obs]
-  obs.mean <- obs.mean[keep_obs]
-  obs.cov <- obs.cov[keep_obs]
-  read_restart_times <- c(lubridate::ymd_hms(start.cut, truncated = 3), obs.times)
+  # Monthly assimilation schedule for local runner: 15th 00:00:00
+  start_date <- lubridate::ymd(settings$state.data.assimilation$start.date)
+  end_date <- lubridate::ymd(settings$state.data.assimilation$end.date)
+  start_anchor <- lubridate::floor_date(start_date, unit = "month") + lubridate::days(14)
+  if (start_anchor < start_date) start_anchor <- start_anchor %m+% lubridate::months(1)
+
+  obs.times <- seq(start_anchor, end_date, by = "1 month")
+  obs.times <- lubridate::ymd_hms(paste(as.Date(obs.times), "00:00:00"), tz = "UTC")
+
+  # Align observations to scheduled monthly timestamps
+  obs.keys <- as.character(as.Date(obs.times))
+  if (is.null(names(obs.mean))) names(obs.mean) <- character(length(obs.mean))
+  if (is.null(names(obs.cov))) names(obs.cov) <- character(length(obs.cov))
+  obs.mean <- setNames(lapply(obs.keys, function(k) obs.mean[[k]]), obs.keys)
+  obs.cov <- setNames(lapply(obs.keys, function(k) obs.cov[[k]]), obs.keys)
+
+  start.cut <- obs.times[1] %m-% lubridate::months(1)
+  read_restart_times <- c(start.cut, obs.times)
   nt  <- length(obs.times) #sets length of for loop for Forecast/Analysis
   if (nt==0) PEcAn.logger::logger.severe('There has to be at least one Obs.')
   
@@ -195,8 +176,8 @@ sda.enkf_local <- function(settings,
           #   )
           # )
           split_args <- list(
-            start.time = lubridate::ymd_hms(settings$run$site$met.start, truncated = 3),
-            stop.time  = lubridate::ymd_hms(settings$run$site$met.end, truncated = 3),
+            start.time = start.cut,
+            stop.time  = obs.times[1],
             inputs     = settings$run$inputs$met$path[[i]],
             outpath    = file.path(settings$outdir, "Extracted_met", settings$run$site$id),
             overwrite  = FALSE
@@ -310,7 +291,7 @@ sda.enkf_local <- function(settings,
                                new.state = new_state_site,
                                new.params = new.params,
                                inputs = inputs,
-                               RENAME = FALSE,
+                               RENAME = TRUE,
                                ensemble.id = settings$ensemble$ensemble.id
                              )
                            })

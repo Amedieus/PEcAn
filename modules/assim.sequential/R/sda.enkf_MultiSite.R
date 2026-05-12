@@ -146,7 +146,7 @@ sda.enkf.multisite <- function(settings,
   start_anchor <- lubridate::floor_date(start_date, unit = "month") + lubridate::days(14)
   if (start_anchor < start_date) start_anchor <- start_anchor %m+% lubridate::months(1)
   obs.times <- seq(start_anchor, end_date, by = "1 month")
-  obs.times <- lubridate::ymd_hms(paste(as.Date(obs.times), "00:00:00"), tz = "UTC")
+  obs.times <- lubridate::ymd_hms(paste(as.Date(obs.times), "00:00:00"))
 
   # Ensure obs lists have entries for each scheduled assimilation time
   obs.keys <- as.character(as.Date(obs.times))
@@ -154,7 +154,6 @@ sda.enkf.multisite <- function(settings,
   if (is.null(names(obs.cov))) names(obs.cov) <- character(length(obs.cov))
   obs.mean <- setNames(lapply(obs.keys, function(k) obs.mean[[k]]), obs.keys)
   obs.cov <- setNames(lapply(obs.keys, function(k) obs.cov[[k]]), obs.keys)
-  start.cut <- obs.times[1] %m-% lubridate::months(1)
   read_restart_times <- c(lubridate::ymd_hms(start.cut, truncated = 3), obs.times)
   nt  <- length(obs.times) #sets length of for loop for Forecast/Analysis
   if (nt==0) PEcAn.logger::logger.severe('There has to be at least one Obs.')

@@ -125,7 +125,7 @@ sda.enkf_local <- function(settings,
   obs.mean <- setNames(lapply(obs.keys, function(k) obs.mean[[k]]), obs.keys)
   obs.cov <- setNames(lapply(obs.keys, function(k) obs.cov[[k]]), obs.keys)
 
-  start.cut <- obs.times[1] %m-% lubridate::months(1)
+  start.cut <- lubridate::ymd_hms(paste(as.Date(start_anchor), "00:00:00"), tz = "UTC")
   read_restart_times <- c(start.cut, obs.times)
   nt  <- length(obs.times) #sets length of for loop for Forecast/Analysis
   if (nt==0) PEcAn.logger::logger.severe('There has to be at least one Obs.')

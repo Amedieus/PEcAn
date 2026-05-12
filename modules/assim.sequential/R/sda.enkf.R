@@ -341,7 +341,7 @@ sda.enkf.original <- function(settings, obs.mean, obs.cov, IC = NULL, Q = NULL, 
   start_anchor <- lubridate::floor_date(start_date, unit = "month") + lubridate::days(14)
   if (start_anchor < start_date) start_anchor <- start_anchor %m+% lubridate::months(1)
   obs.times <- seq(start_anchor, end_date, by = "1 month")
-  obs.times <- lubridate::ymd_hms(paste(as.Date(obs.times), "00:00:00"), tz = "UTC")
+  obs.times <- lubridate::ymd_hms(paste(as.Date(obs.times), "00:00:00"))
 
   # Ensure obs lists have entries for each scheduled assimilation time
   obs.keys <- as.character(as.Date(obs.times))
@@ -349,7 +349,6 @@ sda.enkf.original <- function(settings, obs.mean, obs.cov, IC = NULL, Q = NULL, 
   if (is.null(names(obs.cov))) names(obs.cov) <- character(length(obs.cov))
   obs.mean <- setNames(lapply(obs.keys, function(k) obs.mean[[k]]), obs.keys)
   obs.cov <- setNames(lapply(obs.keys, function(k) obs.cov[[k]]), obs.keys)
-  start.cut <- obs.times[1] %m-% lubridate::months(1)
   
   # need explicit forecast length variable in settings start time, stop time, restart time if
   # restart time is not provided restart in stop time

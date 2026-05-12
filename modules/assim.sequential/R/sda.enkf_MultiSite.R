@@ -140,22 +140,20 @@ sda.enkf.multisite <- function(settings,
   assim.sda <- Start.year:End.year
   obs.mean <- obs.mean[sapply(lubridate::year(names(obs.mean)), function(obs.year) obs.year %in% (assim.sda))] #checks obs.mean dates against assimyear dates
   obs.cov <- obs.cov[sapply(lubridate::year(names(obs.cov)), function(obs.year) obs.year %in% (assim.sda))] #checks obs.cov dates against assimyear dates
-  #checking that there are dates in obs.mean and adding midnight as the time
-  obs.times <- names(obs.mean)
-  obs.times.POSIX <- lubridate::ymd_hms(obs.times)
-  for (i in seq_along(obs.times)) {
-    if (is.na(obs.times.POSIX[i])) {
-      if (is.na(lubridate::ymd(obs.times[i]))) {
-        PEcAn.logger::logger.warn("Error: no dates associated with observations")
-      } else {
-        ### Data does not have time associated with dates 
-        ### Adding 12:59:59PM assuming next time step starts one second later
-        PEcAn.logger::logger.warn("Pumpkin Warning: adding one minute before midnight time assumption to dates associated with data")
-        obs.times.POSIX[i] <- lubridate::ymd_hms(paste(obs.times[i], "23:59:59"))
-      }
-    }
-  }
-  obs.times <- obs.times.POSIX
+  # Monthly assimilation schedule: always assimilate at 15th 00:00:00
+  start_date <- lubridate::ymd(settings$state.data.assimilation$start.date)
+  end_date <- lubridate::ymd(settings$state.data.assimilation$end.date)
+  start_anchor <- lubridate::floor_date(start_date, unit = "month") + lubridate::days(14)
+  if (start_anchor < start_date) start_anchor <- start_anchor %m+% lubridate::months(1)
+  obs.times <- seq(start_anchor, end_date, by = "1 month")
+  obs.times <- lubridate::ymd_hms(paste(as.Date(obs.times), "00:00:00"))
+
+  # Ensure obs lists have entries for each scheduled assimilation time
+  obs.keys <- as.character(as.Date(obs.times))
+  if (is.null(names(obs.mean))) names(obs.mean) <- character(length(obs.mean))
+  if (is.null(names(obs.cov))) names(obs.cov) <- character(length(obs.cov))
+  obs.mean <- setNames(lapply(obs.keys, function(k) obs.mean[[k]]), obs.keys)
+  obs.cov <- setNames(lapply(obs.keys, function(k) obs.cov[[k]]), obs.keys)
   read_restart_times <- c(lubridate::ymd_hms(start.cut, truncated = 3), obs.times)
   nt  <- length(obs.times) #sets length of for loop for Forecast/Analysis
   if (nt==0) PEcAn.logger::logger.severe('There has to be at least one Obs.')

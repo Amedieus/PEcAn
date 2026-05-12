@@ -68,49 +68,49 @@ write_restart.SIPNET <- function(outdir, runid, start.time, stop.time, settings,
   
   if ("LeafC" %in% variables) {
     analysis.save[[length(analysis.save) + 1]] <- new.state$LeafC * prior.sla * 2  ## kgC/m2*m2/kg*2kg/kgC -> m2/m2
-    if (new.state$LeafC < 0) analysis.save[[length(analysis.save)]] <- 0
+    if (isTRUE(new.state$LeafC < 0)) analysis.save[[length(analysis.save)]] <- 0
     names(analysis.save[[length(analysis.save)]]) <- c("lai")
   }
   
   if ("litter_carbon_content" %in% variables) {
     analysis.save[[length(analysis.save) + 1]] <- PEcAn.utils::ud_convert(new.state$litter_carbon_content, 'kg m-2', 'g m-2') # kgC/m2 -> gC/m2
-    if (new.state$litter_carbon_content < 0) analysis.save[[length(analysis.save)]] <- 0
+    if (isTRUE(new.state$litter_carbon_content < 0)) analysis.save[[length(analysis.save)]] <- 0
     names(analysis.save[[length(analysis.save)]]) <- c("litter_carbon_content")
   }
   
   if ("TotSoilCarb" %in% variables) {
     analysis.save[[length(analysis.save) + 1]] <- PEcAn.utils::ud_convert(new.state$TotSoilCarb, 'kg m-2', 'g m-2') # kgC/m2 -> gC/m2
-    if (new.state$TotSoilCarb < 0) analysis.save[[length(analysis.save)]] <- 0
+    if (isTRUE(new.state$TotSoilCarb < 0)) analysis.save[[length(analysis.save)]] <- 0
     names(analysis.save[[length(analysis.save)]]) <- c("soil")
   }
   
   if("litter_mass_content_of_water" %in% variables){
     analysis.save[[length(analysis.save) + 1]] <- new.state$litter_mass_content_of_water  ## unitless
-    if (new.state$litter_mass_content_of_water < 0 || new.state$litter_mass_content_of_water > 1) analysis.save[[length(analysis.save)]] <- 0.5
+    if (isTRUE(new.state$litter_mass_content_of_water < 0 || new.state$litter_mass_content_of_water > 1)) analysis.save[[length(analysis.save)]] <- 0.5
     names(analysis.save[[length(analysis.save)]]) <- c("litter_mass_content_of_water")
   }
   
   if ("SoilMoist" %in% variables) {
     analysis.save[[length(analysis.save) + 1]] <- new.state$SoilMoist
-    if (new.state$SoilMoist < 0) analysis.save[[length(analysis.save)]] <- 0
+    if (isTRUE(new.state$SoilMoist < 0)) analysis.save[[length(analysis.save)]] <- 0
     names(analysis.save[[length(analysis.save)]]) <- c("soilWater")
   }
   
   if ("SoilMoistFrac" %in% variables) {
     analysis.save[[length(analysis.save) + 1]] <- new.state$SoilMoistFrac/100  ## unitless
-    if (analysis.save[[length(analysis.save)]] < 0 || analysis.save[[length(analysis.save)]] > 1) analysis.save[[length(analysis.save)]] <- 0.5
+    if (isTRUE(analysis.save[[length(analysis.save)]] < 0 || analysis.save[[length(analysis.save)]] > 1)) analysis.save[[length(analysis.save)]] <- 0.5
     names(analysis.save[[length(analysis.save)]]) <- c("soilWFrac")
   }
   
   if ("SWE" %in% variables) {
     analysis.save[[length(analysis.save) + 1]] <- new.state$SWE/10
-    if (analysis.save[[length(analysis.save)]] < 0) analysis.save[[length(analysis.save)]] <- 0
+    if (isTRUE(analysis.save[[length(analysis.save)]] < 0)) analysis.save[[length(analysis.save)]] <- 0
     names(analysis.save[[length(analysis.save)]]) <- c("SWE")
   }
 
   if ("LAI" %in% variables) {
     analysis.save[[length(analysis.save) + 1]] <- new.state$LAI  
-    if (new.state$LAI < 0) analysis.save[[length(analysis.save)]] <- 0
+    if (isTRUE(new.state$LAI < 0)) analysis.save[[length(analysis.save)]] <- 0
     names(analysis.save[[length(analysis.save)]]) <- c("lai")
   }
   

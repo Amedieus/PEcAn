@@ -335,26 +335,21 @@ sda.enkf.original <- function(settings, obs.mean, obs.cov, IC = NULL, Q = NULL, 
   # read time from data if data is missing you still need
   # to have NAs or NULL with date name vector to read the correct netcdfs by read_restart
   
-  obs.times <- names(obs.mean)
-  obs.times.POSIX <- ymd_hms(obs.times)
+  # Monthly assimilation schedule: always assimilate at 15th 00:00:00
+  start_date <- lubridate::ymd(settings$state.data.assimilation$start.date)
+  end_date <- lubridate::ymd(settings$state.data.assimilation$end.date)
+  start_anchor <- lubridate::floor_date(start_date, unit = "month") + lubridate::days(14)
+  if (start_anchor < start_date) start_anchor <- start_anchor %m+% lubridate::months(1)
+  obs.times <- seq(start_anchor, end_date, by = "1 month")
+  obs.times <- lubridate::ymd_hms(paste(as.Date(obs.times), "00:00:00"), tz = "UTC")
 
-  for (i in seq_along(obs.times)) {
-    if (is.na(obs.times.POSIX[i])) {
-      if (is.na(lubridate::ymd(obs.times[i]))) {
-        print("Error: no dates associated with observations")
-      } else {
-        ### Data does not have time associated with dates 
-        ### Adding 12:59:59PM assuming next time step starts one second later
-        print("Pumpkin Warning: adding one minute before midnight time assumption to dates associated with data")
-        obs.times.POSIX[i] <- ymd_hms(paste(obs.times[i], "23:59:59"))
-        # if(nchar(year(obs.times.POSIX[i]))==3){
-        #   #TODO: BROKEN: need to add leading zeros to years with less than 4 digits
-        #   obs.times.POSIX[i] <- paste0('0',ymd_hms(paste(obs.times[i], "23:59:59")))
-        # } 
-      }
-    }
-  }
-  obs.times <- obs.times.POSIX
+  # Ensure obs lists have entries for each scheduled assimilation time
+  obs.keys <- as.character(as.Date(obs.times))
+  if (is.null(names(obs.mean))) names(obs.mean) <- character(length(obs.mean))
+  if (is.null(names(obs.cov))) names(obs.cov) <- character(length(obs.cov))
+  obs.mean <- setNames(lapply(obs.keys, function(k) obs.mean[[k]]), obs.keys)
+  obs.cov <- setNames(lapply(obs.keys, function(k) obs.cov[[k]]), obs.keys)
+  start.cut <- obs.times[1] %m-% lubridate::months(1)
   
   # need explicit forecast length variable in settings start time, stop time, restart time if
   # restart time is not provided restart in stop time

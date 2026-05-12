@@ -176,8 +176,8 @@ sda.enkf_local <- function(settings,
           #   )
           # )
           split_args <- list(
-            start.time = lubridate::ymd_hms(settings$run$site$met.start, truncated = 3),
-            stop.time  = lubridate::ymd_hms(settings$run$site$met.end, truncated = 3),
+            start.time = start.cut,
+            stop.time  = obs.times[1],
             inputs     = settings$run$inputs$met$path[[i]],
             outpath    = file.path(settings$outdir, "Extracted_met", settings$run$site$id),
             overwrite  = FALSE
@@ -291,7 +291,7 @@ sda.enkf_local <- function(settings,
                                new.state = new_state_site,
                                new.params = new.params,
                                inputs = inputs,
-                               RENAME = FALSE,
+                               RENAME = TRUE,
                                ensemble.id = settings$ensemble$ensemble.id
                              )
                            })

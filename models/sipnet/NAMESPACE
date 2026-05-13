@@ -2,7 +2,7 @@
 
 export(mergeNC)
 export(met2model.SIPNET)
-export(model2netcdf.SIPNET)
+export(parse_sipnet_datetime)
 export(read_restart.SIPNET)
 export(remove.config.SIPNET)
 export(sample.IC.SIPNET)

@@ -33,13 +33,13 @@ load("/projectnb/dietzelab/guYANG/pecan/pecan.Rdata")
 # settings <- PEcAn.settings::read.settings(settings_dir)
 
 # Change dir name and settings
-settings$outdir      <- "/projectnb/dietzelab/guYANG/pecan/output/5obs_monthly/"
+settings$outdir      <- "/projectnb/dietzelab/guYANG/pecan/output/6obs_monthly/"
 settings$rundir      <- file.path(settings$outdir, "run")
 settings$modeloutdir <- file.path(settings$outdir, "out")
 settings$host$rundir <- file.path(settings$outdir, "run")
 settings$host$outdir <- file.path(settings$outdir, "out")
 settings$host$folder <- file.path(settings$outdir, "out")
-settings$ensemble$size <- 2
+settings$ensemble$size <- 25
 settings$state.data.assimilation$adjustment <- "FALSE"
 settings$host$prerun <- "module load R/4.4.0"
 ###### Change Q type
@@ -71,8 +71,8 @@ settings <- PEcAn.settings::prepare.settings(settings)
 # load("/projectnb/dietzelab/guYANG/pecan/runners/test10/obs.mean.RData")
 # load("/projectnb/dietzelab/guYANG/pecan/runners/test10/obs.cov.RData")
 
-load("/projectnb/dietzelab/guYANG/pecan/output/obs/Rdata/obs.mean.monthly.noSM.Rdata")
-load("/projectnb/dietzelab/guYANG/pecan/output/obs/Rdata/obs.cov.monthly.noSM.Rdata")
+load("/projectnb/dietzelab/guYANG/pecan/output/obs/Rdata/obs.mean.6obsmonthly.Rdata")
+load("/projectnb/dietzelab/guYANG/pecan/output/obs/Rdata/obs.cov.6obsmonthly.Rdata")
 
 sub_obs <- function(L, keep) setNames(lapply(L, \(l) l[names(l) %in% keep]), names(L))
 obs.mean <- sub_obs(obs.mean, keep_ids)
@@ -119,8 +119,8 @@ control = list(
   forceRun = TRUE,
   run_parallel = FALSE,
   MCMC.args = list(
-    niter = 200,   
-    nburnin = 100,
+    niter = 200000,   
+    nburnin = 100000,
     nthin = 5,
     nchain = 3
   ),
@@ -143,8 +143,8 @@ res <- PEcAnAssimSequential:::sda.enkf_local(
     forceRun = TRUE,
     run_parallel = FALSE,
     MCMC.args = list(
-      niter = 200,   
-      nburnin = 100,
+      niter = 200000,   
+      nburnin = 100000,
       nthin = 5,
       nchain = 3
     ),

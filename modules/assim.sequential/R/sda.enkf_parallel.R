@@ -160,6 +160,13 @@ sda.enkf_local <- function(settings,
   if(!file.exists(paste0(settings$outdir, "/Extracted_met/"))){
     dir.create(paste0(settings$outdir, "/Extracted_met/"))
   }
+  # Save original full-length met paths before the first split.
+  # Later t > 1 should always split from these raw met files,
+  # not from the already-split t = 1 files.
+  raw.met.paths.by.site <- as.list(conf.settings) %>%
+    purrr::map(function(s) {
+      s$run$inputs$met$path
+    })
   PEcAn.logger::logger.info("Splitting mets!")
   conf.settings <-conf.settings %>%
     `class<-`(c("list")) %>% #until here, it separates all the settings for all sites that listed in the xml file
@@ -185,7 +192,7 @@ sda.enkf_local <- function(settings,
           split_args <- list(
             # start.time = lubridate::ymd_hms(settings$run$site$met.start, truncated = 3),
             # stop.time  = lubridate::ymd_hms(settings$run$site$met.end, truncated = 3),
-            start.time = lubridate::ymd_hms(settings$run$site$met.start, truncated = 3),
+            start.time = start.cut,
             stop.time  = first_stop,
             inputs     = settings$run$inputs$met$path[[i]],
             outpath    = file.path(settings$outdir, "Extracted_met", settings$run$site$id),
@@ -244,7 +251,7 @@ sda.enkf_local <- function(settings,
   pre.states <- vector("list", length = length(var.names)) %>% purrr::set_names(var.names)
   # initialize the lists of forecasts for all time points.
   all.X <- vector("list", length = nt)
-  inputs.raw <- inputs
+  inputs <- NULL
   for (t in 1:nt) {
     # initialize dat for saving memory usage.
     sda.outputs <- FORECAST <- enkf.params <- ANALYSIS <- ens_weights <- list()
@@ -259,29 +266,121 @@ sda.enkf_local <- function(settings,
       #for next time step split the met if model requires
       #-Splitting the input for the models that they don't care about the start and end time of simulations and they run as long as their met file.
       PEcAn.logger::logger.info("Splitting mets!")
-      inputs.split <- 
-        furrr::future_pmap(list(conf.settings %>% `class<-`(c("list")), inputs.raw, model), function(settings, inputs, model) {
-          # Loading the model package - this is required bc of the furrr
-          library(paste0("PEcAn.",model), character.only = TRUE)
-          inputs.split <- inputs
+      inputs.split <- furrr::future_pmap(
+        list(
+          conf.settings %>% `class<-`(c("list")),
+          inputs,
+          raw.met.paths.by.site,
+          model
+        ),
+        function(settings, inputs.template, raw.met.paths, model) {
+          
+          library(paste0("PEcAn.", model), character.only = TRUE)
+          
+          # Use the t = 1 PEcAn input structure as a template.
+          # For t > 1, only replace met$samples with newly split interval met files.
+          inputs.split <- inputs.template
+          
           if (!no_split) {
-            for (i in seq_len(nens)) {
-              #---------------- model specific split inputs
-              split_args <- list(
-                start.time = (lubridate::ymd_hms(obs.times[t - 1], truncated = 3) + lubridate::second(lubridate::hms("00:00:01"))),
-                stop.time = lubridate::ymd_hms(obs.times[t], truncated = 3),
-                inputs = inputs$met$samples[[i]]
+            
+            raw.met.paths <- unlist(raw.met.paths, use.names = FALSE)
+            n.raw.met <- length(raw.met.paths)
+            
+            if (n.raw.met == 0) {
+              stop(
+                "No raw met paths found for site ",
+                settings$run$site$id,
+                call. = FALSE
               )
+            }
+            
+            if (n.raw.met == 1) {
+              raw.met.paths <- rep(raw.met.paths, nens)
+            }
+            
+            interval_start <- lubridate::ymd_hms(obs.times[t - 1], truncated = 3) +
+              lubridate::seconds(1)
+            
+            interval_stop <- lubridate::ymd_hms(obs.times[t], truncated = 3)
+            
+            site_met_outpath <- file.path(
+              settings$outdir,
+              "Extracted_met",
+              settings$run$site$id
+            )
+            
+            if (!dir.exists(site_met_outpath)) {
+              dir.create(site_met_outpath, recursive = TRUE, showWarnings = FALSE)
+            }
+            
+            for (i in seq_len(nens)) {
+              
+              if ("met" %in% colnames(input_design)) {
+                met_index <- input_design[["met"]][i]
+              } else {
+                met_index <- 1
+              }
+              
+              if (is.na(met_index) || met_index < 1 || met_index > n.raw.met) {
+                stop(
+                  "Invalid met_index from input_design for site ",
+                  settings$run$site$id,
+                  ", ensemble ", i,
+                  ". met_index = ", met_index,
+                  "; n.raw.met = ", n.raw.met,
+                  call. = FALSE
+                )
+              }
+              
+              raw.met.i <- raw.met.paths[[met_index]]
+              
+              if (!file.exists(raw.met.i)) {
+                stop(
+                  "Raw met file does not exist for site ",
+                  settings$run$site$id,
+                  ", ensemble ", i,
+                  ":\n", raw.met.i,
+                  call. = FALSE
+                )
+              }
+              
+              split_args <- list(
+                start.time = interval_start,
+                stop.time  = interval_stop,
+                inputs     = raw.met.i,
+                outpath    = site_met_outpath,
+                overwrite  = TRUE
+              )
+              
               if (model != "SIPNET") {
                 split_args <- c(list(settings = settings), split_args)
               }
-              inputs.split$met$samples[i] <- do.call(my.split_inputs, args = split_args)
+              
+              split_file <- do.call(
+                my.split_inputs,
+                args = split_args
+              )
+              
+              if (is.null(split_file) || !file.exists(split_file)) {
+                stop(
+                  "split_inputs did not create a valid met file for site ",
+                  settings$run$site$id,
+                  ", ensemble ", i,
+                  "\ninterval_start = ", as.character(interval_start),
+                  "\ninterval_stop  = ", as.character(interval_stop),
+                  "\nraw.met.i      = ", raw.met.i,
+                  "\nsplit_file     = ", as.character(split_file),
+                  call. = FALSE
+                )
+              }
+              
+              inputs.split$met$samples[[i]] <- split_file
             }
-          } else{
-            inputs.split <- inputs
           }
+          
           inputs.split
-        })
+        }
+      )
       #---------------- setting up the restart argument for each site separately and keeping them in a list
       PEcAn.logger::logger.info("Collecting restart info!")
       restart.list <-
@@ -295,8 +394,8 @@ sda.enkf_local <- function(settings,
                              }
                              list(
                                runid = configs$runs$id,
-                               start.time = strptime(obs.times[t -1], format = "%Y-%m-%d %H:%M:%S") + lubridate::second(lubridate::hms("00:00:01")),
-                               stop.time = strptime(obs.times[t], format ="%Y-%m-%d %H:%M:%S"),
+                               start.time = lubridate::ymd_hms(obs.times[t - 1], truncated = 3) + lubridate::seconds(1),
+                               stop.time  = lubridate::ymd_hms(obs.times[t], truncated = 3),
                                settings = settings,
                                new.state = new_state_site,
                                new.params = new.params,

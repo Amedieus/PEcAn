@@ -57,24 +57,121 @@ mergeNC <- function(
 #'
 #' @export
 #' @author Shawn Serbin, Michael Dietze
+#--------------------------------------------------------------------------------------------------#
+# Helper functions for interval-based SIPNET NetCDF
+#--------------------------------------------------------------------------------------------------#
+
+parse_sipnet_datetime <- function(x) {
+  if (inherits(x, "POSIXt")) {
+    return(as.POSIXct(x, tz = "UTC"))
+  }
+  
+  x <- as.character(x)
+  
+  out <- lubridate::ymd_hms(x, truncated = 3, tz = "UTC", quiet = TRUE)
+  
+  if (is.na(out)) {
+    out <- lubridate::ymd(x, tz = "UTC", quiet = TRUE)
+  }
+  
+  if (is.na(out)) {
+    stop("Cannot parse datetime: ", x, call. = FALSE)
+  }
+  
+  as.POSIXct(out, tz = "UTC")
+}
+
+
+sipnet_interval_tag <- function(x) {
+  x <- parse_sipnet_datetime(x)
+  format(x, "%Y%m%dT%H%M%S", tz = "UTC")
+}
+
+
+sipnet_interval_nc_name <- function(start_date, end_date) {
+  paste0(
+    sipnet_interval_tag(start_date),
+    "_to_",
+    sipnet_interval_tag(end_date),
+    ".nc"
+  )
+}
+
+
+sipnet2datetime <- function(year, doy, hour) {
+  
+  hr <- floor(hour)
+  minsec <- (hour - hr) * 60
+  minute <- floor(minsec)
+  sec <- (minsec - minute) * 60
+  
+  minute <- ifelse(sec == 60, minute + 1, minute)
+  sec <- ifelse(sec == 60, 0, sec)
+  
+  hr <- ifelse(minute == 60, hr + 1, hr)
+  minute <- ifelse(minute == 60, 0, minute)
+  
+  datetime <- strptime(
+    paste(year, doy, hr, minute, sec),
+    "%Y %j %H %M %S",
+    tz = "UTC"
+  )
+  
+  as.POSIXct(datetime, tz = "UTC")
+}
+
+
+#--------------------------------------------------------------------------------------------------#
+# Interval-based SIPNET output to NetCDF
+#--------------------------------------------------------------------------------------------------#
+
 model2netcdf.SIPNET <- function(outdir, sitelat, sitelon, start_date, end_date,
                                 delete.raw = FALSE, revision = NULL,
                                 prefix = "sipnet.out",
                                 overwrite = TRUE, conflict = FALSE) {
-  ### Read in model output in SIPNET format
+  
   sipnet_out_file <- file.path(outdir, prefix)
+  
+  if (!file.exists(sipnet_out_file)) {
+    stop("SIPNET output file not found: ", sipnet_out_file, call. = FALSE)
+  }
+  
+  interval_start <- parse_sipnet_datetime(start_date)
+  interval_stop  <- parse_sipnet_datetime(end_date)
+  
+  if (interval_stop <= interval_start) {
+    stop(
+      "end_date must be later than start_date. start_date = ",
+      as.character(interval_start),
+      "; end_date = ",
+      as.character(interval_stop),
+      call. = FALSE
+    )
+  }
+  
+  interval_nc_file <- file.path(
+    outdir,
+    sipnet_interval_nc_name(interval_start, interval_stop)
+  )
   
   # SIPNET v1 had a "Notes" comment line before the header; v2 removed it.
   first_line <- readLines(sipnet_out_file, n = 1)
   skip_n <- if (grepl("^year", first_line)) 0 else 1
   
-  # Temporary workaround until https://github.com/PecanProject/sipnet/issues/304 is resolved.
+  # Read SIPNET raw output
   sipnet_output <- tryCatch({
-    utils::read.table(sipnet_out_file, header = TRUE, skip = skip_n, sep = "")
+    utils::read.table(
+      sipnet_out_file,
+      header = TRUE,
+      skip = skip_n,
+      sep = ""
+    )
   }, error = function(err) {
+    
     PEcAn.logger::logger.warn(
       "Failed to read using `read.table`. Trying to parse output manually."
     )
+    
     raw_lines <- readLines(sipnet_out_file)
     raw_header <- raw_lines[[1 + skip_n]]
     raw_body <- utils::tail(raw_lines, -(1 + skip_n))
@@ -91,28 +188,41 @@ model2netcdf.SIPNET <- function(outdir, sitelat, sitelon, start_date, end_date,
       col.names = proc_header,
       na.strings = c("nan", "-nan")
     )
+    
     result[] <- lapply(result, as.numeric)
     result
   })
   
-  ### Determine number of years and output timestep
+  if (nrow(sipnet_output) == 0) {
+    stop("SIPNET output is empty: ", sipnet_out_file, call. = FALSE)
+  }
+  
+  # Check years
   simulation_years <- unique(sipnet_output$year)
-  year_seq <- seq(lubridate::year(start_date), lubridate::year(end_date))
+  year_seq <- seq(lubridate::year(interval_start), lubridate::year(interval_stop))
+  
   if (!all(year_seq %in% simulation_years)) {
-    PEcAn.logger::logger.severe(
-      "Years selected for model run and SIPNET output years do not match "
+    PEcAn.logger::logger.warn(
+      "Years selected for model run and SIPNET output years may not match. ",
+      "Requested years: ", paste(year_seq, collapse = ", "),
+      "; output years: ", paste(simulation_years, collapse = ", ")
     )
   }
   
-  # get number of model timesteps per day
+  # Get number of model timesteps per day
   out_day <- sum(
     sipnet_output$year == simulation_years[1] &
       sipnet_output$day == unique(sipnet_output$day)[1],
     na.rm = TRUE
   )
+  
+  if (is.na(out_day) || out_day <= 0) {
+    stop("Cannot infer SIPNET output timestep from sipnet.out.", call. = FALSE)
+  }
+  
   timestep.s <- 86400 / out_day
   
-  ## Unit conversions
+  # Unit conversions
   g_to_kg <- function(x) x / 1000
   g_step_to_kg_sec <- function(x) x / 1000 / timestep.s
   cm_to_mm <- function(x) x * 10
@@ -123,19 +233,30 @@ model2netcdf.SIPNET <- function(outdir, sitelat, sitelon, start_date, end_date,
       # C and N pools
       dplyr::across(
         .cols = c(
-          dplyr::all_of(c("plantWoodC", "plantLeafC", "coarseRootC", "fineRootC", "soil", "litter")),
+          dplyr::all_of(c(
+            "plantWoodC", "plantLeafC", "coarseRootC",
+            "fineRootC", "soil", "litter"
+          )),
           dplyr::any_of(c("minN", "soilOrgN", "litterN"))
         ),
         .fns = g_to_kg
       ),
+      
       # C and N fluxes
       dplyr::across(
         .cols = c(
-          dplyr::all_of(c("gpp", "nee", "npp", "rAboveground", "rRoot", "rtot", "rSoil")),
-          dplyr::any_of(c("woodCreation", "n2o", "nLeaching", "nFixation", "nUptake", "ch4"))
+          dplyr::all_of(c(
+            "gpp", "nee", "npp", "rAboveground",
+            "rRoot", "rtot", "rSoil"
+          )),
+          dplyr::any_of(c(
+            "woodCreation", "n2o", "nLeaching",
+            "nFixation", "nUptake", "ch4"
+          ))
         ),
         .fns = g_step_to_kg_sec
       ),
+      
       # Water pools
       dplyr::across(
         .cols = c(
@@ -144,243 +265,340 @@ model2netcdf.SIPNET <- function(outdir, sitelat, sitelon, start_date, end_date,
         ),
         .fns = cm_to_mm
       ),
+      
       # Water fluxes
       dplyr::across(
         .cols = dplyr::all_of("evapotranspiration"),
         .fns = cm_step_to_mm_sec
       ),
+      
       fluxestranspiration = cm_to_mm(.data$fluxestranspiration) / 86400,
       datetime = sipnet2datetime(.data$year, .data$day, .data$time)
     )
   
-  # NEW: monthly grouping key
-  # sipnet_output$year_month <- format(sipnet_output$datetime, "%Y-%m")
-  # month_seq <- unique(sipnet_output$year_month)
-  # NEW: monthly grouping key
-  sipnet_output$year_month <- format(sipnet_output$datetime, "%Y-%m")
-  # C: only write the month for this timestep/run (derived from end_date)
-  last_ts <- max(sipnet_output$datetime, na.rm = TRUE)
-  current_month <- format(as.Date(last_ts), "%Y-%m")
-  month_seq <- current_month
+  # Keep the full forecast interval, not only the stop-time month
+  sub.sipnet.output <- sipnet_output[
+    sipnet_output$datetime >= interval_start &
+      sipnet_output$datetime <= interval_stop,
+  ]
   
-  # calculate LAI for standard output
-  param <- utils::read.table(
-    file.path(gsub(pattern = "/out/", replacement = "/run/", x = outdir), "sipnet.param"),
-    stringsAsFactors = FALSE
-  )
-  leafCSpWt <- param[param[, 1] == "leafCSpWt", 2]
-  SLA <- 1000 / leafCSpWt  # m2 leaf / kg C
-  
-  ### Loop over months to create monthly netCDF outputs
-  for (ym in month_seq) {
-    month_start <- paste0(ym, "-01")
-    nc_file <- file.path(outdir, paste0(ym, ".nc"))
-    
-    if (file.exists(nc_file)) {
-      if (isTRUE(overwrite)) {
-        ok <- file.remove(nc_file)
-        if (!ok) stop("Failed to remove existing NetCDF file: ", nc_file)
-      } else {
-        message("Skipping existing file (overwrite=FALSE): ", nc_file)
-        next
-      }
-    }
-    
-    message("---- Processing month: ", ym)
-    
-    sub.sipnet.output <- subset(sipnet_output, sipnet_output$year_month == ym)
-    if (nrow(sub.sipnet.output) == 0) next
-    
-    sub_dates_cf <- PEcAn.utils::datetime2cf(
-      sub.sipnet.output$datetime,
-      paste0("days since ", month_start),
-      tz = "UTC"
+  if (nrow(sub.sipnet.output) == 0) {
+    stop(
+      "No SIPNET output rows found inside interval: ",
+      as.character(interval_start), " to ", as.character(interval_stop),
+      "\nRaw output datetime range: ",
+      as.character(min(sipnet_output$datetime, na.rm = TRUE)),
+      " to ",
+      as.character(max(sipnet_output$datetime, na.rm = TRUE)),
+      call. = FALSE
     )
-    
-    dayfrac <- 1 / out_day
-    
-    # time bounds
-    bounds <- array(data = NA, dim = c(length(sub_dates_cf), 2))
-    bounds[, 1] <- sub_dates_cf
-    bounds[, 2] <- bounds[, 1] + dayfrac
-    bounds <- round(bounds, 4)
-    
-    ## Setup outputs
-    output <- list(
-      "GPP" = sub.sipnet.output$gpp,
-      "NPP" = sub.sipnet.output$npp,
-      "TotalResp" = sub.sipnet.output$rtot,
-      "AutoResp" = sub.sipnet.output$rAboveground + sub.sipnet.output$rRoot,
-      "HeteroResp" = sub.sipnet.output$rSoil - sub.sipnet.output$rRoot,
-      "SoilResp" = sub.sipnet.output$rSoil,
-      "NEE" = sub.sipnet.output$nee,
-      "AbvGrndWood" = sub.sipnet.output$plantWoodC,
-      "leaf_carbon_content" = sub.sipnet.output$plantLeafC,
-      "litter_carbon_content" = sub.sipnet.output$litter,
-      "fine_root_carbon_content" = sub.sipnet.output$fineRootC,
-      "coarse_root_carbon_content" = sub.sipnet.output$coarseRootC,
-      "LAI" = sub.sipnet.output$plantLeafC * SLA,
-      "TotLivBiom" = sub.sipnet.output$plantWoodC + sub.sipnet.output$plantLeafC +
-        sub.sipnet.output$coarseRootC + sub.sipnet.output$fineRootC,
-      "TotSoilCarb" = sub.sipnet.output$soil + sub.sipnet.output$litter,
-      "AGB" = sub.sipnet.output$plantWoodC + sub.sipnet.output$plantLeafC,
-      "Qle" = sub.sipnet.output$evapotranspiration * PEcAn.data.atmosphere::get.lv(),
-      "Transp" = sub.sipnet.output$fluxestranspiration,
-      "SoilMoist" = sub.sipnet.output$soilWater,
-      "SoilMoistFrac" = sub.sipnet.output$soilWetnessFrac,
-      "SWE" = sub.sipnet.output$snow
-    )
-    
-    if ("litterWater" %in% names(sub.sipnet.output)) {
-      output[["litter_mass_content_of_water"]] <- sub.sipnet.output$litterWater
-    }
-    if ("woodCreation" %in% names(sub.sipnet.output)) {
-      output[["GWBI"]] <- sub.sipnet.output$woodCreation
-    }
-    if ("minN" %in% names(sub.sipnet.output)) {
-      output[["mineral_N"]] <- sub.sipnet.output$minN
-    }
-    if ("soilOrgN" %in% names(sub.sipnet.output)) {
-      output[["soil_organic_N"]] <- sub.sipnet.output$soilOrgN
-    }
-    if ("litterN" %in% names(sub.sipnet.output)) {
-      output[["litter_N"]] <- sub.sipnet.output$litterN
-    }
-    if ("n2o" %in% names(sub.sipnet.output)) {
-      output[["N2O_flux"]] <- sub.sipnet.output$n2o
-    }
-    if ("nLeaching" %in% names(sub.sipnet.output)) {
-      output[["N_leaching"]] <- sub.sipnet.output$nLeaching
-    }
-    if ("nFixation" %in% names(sub.sipnet.output)) {
-      output[["N_fixation"]] <- sub.sipnet.output$nFixation
-    }
-    if ("nUptake" %in% names(sub.sipnet.output)) {
-      output[["N_uptake"]] <- sub.sipnet.output$nUptake
-    }
-    if ("ch4" %in% names(sub.sipnet.output)) {
-      output[["CH4_flux"]] <- sub.sipnet.output$ch4
-    }
-    
-    output[["time_bounds"]] <- c(rbind(bounds[, 1], bounds[, 2]))
-    
-    # dims
-    t <- ncdf4::ncdim_def(
-      name = "time",
-      longname = "time",
-      units = paste0("days since ", month_start, " 00:00:00"),
-      vals = sub_dates_cf,
-      calendar = "standard",
-      unlim = TRUE
-    )
-    lat <- ncdf4::ncdim_def("lat", "degrees_north", vals = as.numeric(sitelat),
-                            longname = "station_latitude")
-    lon <- ncdf4::ncdim_def("lon", "degrees_east", vals = as.numeric(sitelon),
-                            longname = "station_longitude")
-    dims <- list(lon = lon, lat = lat, time = t)
-    time_interval <- ncdf4::ncdim_def(
-      name = "hist_interval",
-      longname = "history time interval endpoint dimensions",
-      vals = 1:2, units = ""
-    )
-    
-    for (i in seq_along(output)) {
-      if (length(output[[i]]) == 0) output[[i]] <- rep(-999, length(t$vals))
-    }
-    
-    # vars
-    nc_var <- list(
-      "GPP" = PEcAn.utils::to_ncvar("GPP", dims),
-      "NPP" = PEcAn.utils::to_ncvar("NPP", dims),
-      "TotalResp" = PEcAn.utils::to_ncvar("TotalResp", dims),
-      "AutoResp" = PEcAn.utils::to_ncvar("AutoResp", dims),
-      "HeteroResp" = PEcAn.utils::to_ncvar("HeteroResp", dims),
-      "SoilResp" = ncdf4::ncvar_def("SoilResp", units = "kg C m-2 s-1",
-                                    dim = list(lon, lat, t), missval = -999,
-                                    longname = "Soil Respiration"),
-      "NEE" = PEcAn.utils::to_ncvar("NEE", dims),
-      "AbvGrndWood" = PEcAn.utils::to_ncvar("AbvGrndWood", dims),
-      "leaf_carbon_content" = PEcAn.utils::to_ncvar("leaf_carbon_content", dims),
-      "TotLivBiom" = PEcAn.utils::to_ncvar("TotLivBiom", dims),
-      "TotSoilCarb" = PEcAn.utils::to_ncvar("TotSoilCarb", dims),
-      "Qle" = PEcAn.utils::to_ncvar("Qle", dims),
-      "Transp" = PEcAn.utils::to_ncvar("Transp", dims),
-      "SoilMoist" = PEcAn.utils::to_ncvar("SoilMoist", dims),
-      "SoilMoistFrac" = PEcAn.utils::to_ncvar("SoilMoistFrac", dims),
-      "SWE" = PEcAn.utils::to_ncvar("SWE", dims),
-      "litter_carbon_content" = PEcAn.utils::to_ncvar("litter_carbon_content", dims),
-      "LAI" = PEcAn.utils::to_ncvar("LAI", dims),
-      "fine_root_carbon_content" = PEcAn.utils::to_ncvar("fine_root_carbon_content", dims),
-      "coarse_root_carbon_content" = PEcAn.utils::to_ncvar("coarse_root_carbon_content", dims),
-      "AGB" = ncdf4::ncvar_def("AGB", units = "kg C m-2",
-                               dim = list(lon, lat, t), missval = -999,
-                               longname = "Total aboveground biomass"),
-      "time_bounds" = ncdf4::ncvar_def(
-        name = "time_bounds", units = "",
-        longname = "history time interval endpoints",
-        dim = list(time_interval, time = t),
-        prec = "double"
-      )
-    )
-    
-    if ("litter_mass_content_of_water" %in% names(output)) {
-      nc_var[["litter_mass_content_of_water"]] <- PEcAn.utils::to_ncvar("litter_mass_content_of_water", dims)
-    }
-    if ("GWBI" %in% names(output)) {
-      nc_var[["GWBI"]] <- ncdf4::ncvar_def("GWBI", units = "kg C m-2",
-                                           dim = list(lon, lat, t), missval = -999,
-                                           longname = "Gross Woody Biomass Increment")
-    }
-    if ("mineral_N" %in% names(output)) {
-      nc_var[["mineral_N"]] <- ncdf4::ncvar_def("mineral_N", units = "kg N m-2",
-                                                dim = list(lon, lat, t), missval = -999,
-                                                longname = "Soil mineral nitrogen")
-    }
-    if ("soil_organic_N" %in% names(output)) {
-      nc_var[["soil_organic_N"]] <- ncdf4::ncvar_def("soil_organic_N", units = "kg N m-2",
-                                                     dim = list(lon, lat, t), missval = -999,
-                                                     longname = "Soil organic nitrogen")
-    }
-    if ("litter_N" %in% names(output)) {
-      nc_var[["litter_N"]] <- ncdf4::ncvar_def("litter_N", units = "kg N m-2",
-                                               dim = list(lon, lat, t), missval = -999,
-                                               longname = "Litter nitrogen")
-    }
-    if ("N2O_flux" %in% names(output)) {
-      nc_var[["N2O_flux"]] <- PEcAn.utils::to_ncvar("N2O_flux", dims)
-    }
-    if ("N_leaching" %in% names(output)) {
-      nc_var[["N_leaching"]] <- ncdf4::ncvar_def("N_leaching", units = "kg N m-2 s-1",
-                                                 dim = list(lon, lat, t), missval = -999,
-                                                 longname = "Nitrogen leaching flux")
-    }
-    if ("N_fixation" %in% names(output)) {
-      nc_var[["N_fixation"]] <- ncdf4::ncvar_def("N_fixation", units = "kg N m-2 s-1",
-                                                 dim = list(lon, lat, t), missval = -999,
-                                                 longname = "Nitrogen fixation flux")
-    }
-    if ("N_uptake" %in% names(output)) {
-      nc_var[["N_uptake"]] <- ncdf4::ncvar_def("N_uptake", units = "kg N m-2 s-1",
-                                               dim = list(lon, lat, t), missval = -999,
-                                               longname = "Plant nitrogen uptake flux")
-    }
-    if ("CH4_flux" %in% names(output)) {
-      nc_var[["CH4_flux"]] <- PEcAn.utils::to_ncvar("CH4_flux", dims)
-    }
-    
-    # write
-    nc <- ncdf4::nc_create(nc_file, nc_var)
-    ncdf4::ncatt_put(nc, "time", "bounds", "time_bounds", prec = NA)
-    for (key in names(nc_var)) {
-      ncdf4::ncvar_put(nc, nc_var[[key]], output[[key]])
-    }
-    ncdf4::nc_close(nc)
   }
   
-  ## Delete raw output, if requested
+  if (file.exists(interval_nc_file)) {
+    if (isTRUE(overwrite)) {
+      ok <- file.remove(interval_nc_file)
+      if (!ok) {
+        stop("Failed to remove existing NetCDF file: ", interval_nc_file, call. = FALSE)
+      }
+    } else {
+      message("Skipping existing NetCDF file overwrite=FALSE: ", interval_nc_file)
+      return(invisible(interval_nc_file))
+    }
+  }
+  
+  message("---- Processing SIPNET interval: ",
+          as.character(interval_start), " to ", as.character(interval_stop))
+  message("---- Writing interval NetCDF: ", interval_nc_file)
+  
+  # Calculate LAI for standard output
+  param_file <- file.path(
+    gsub(pattern = "/out/", replacement = "/run/", x = outdir),
+    "sipnet.param"
+  )
+  
+  if (!file.exists(param_file)) {
+    stop("Cannot find sipnet.param: ", param_file, call. = FALSE)
+  }
+  
+  param <- utils::read.table(param_file, stringsAsFactors = FALSE)
+  leafCSpWt <- as.numeric(param[param[, 1] == "leafCSpWt", 2][1])
+  
+  if (is.na(leafCSpWt)) {
+    stop("Cannot find valid `leafCSpWt` in sipnet.param: ", param_file, call. = FALSE)
+  }
+  
+  SLA <- 1000 / leafCSpWt  # m2 leaf / kg C
+  
+  # Time axis
+  time_origin <- format(interval_start, "%Y-%m-%d %H:%M:%S", tz = "UTC")
+  time_units <- paste0("days since ", time_origin)
+  
+  sub_dates_cf <- PEcAn.utils::datetime2cf(
+    sub.sipnet.output$datetime,
+    time_units,
+    tz = "UTC"
+  )
+  
+  dayfrac <- timestep.s / 86400
+  
+  bounds <- array(data = NA, dim = c(length(sub_dates_cf), 2))
+  bounds[, 1] <- sub_dates_cf
+  bounds[, 2] <- bounds[, 1] + dayfrac
+  bounds <- round(bounds, 8)
+  
+  # Output variables
+  output <- list(
+    "GPP" = sub.sipnet.output$gpp,
+    "NPP" = sub.sipnet.output$npp,
+    "TotalResp" = sub.sipnet.output$rtot,
+    "AutoResp" = sub.sipnet.output$rAboveground + sub.sipnet.output$rRoot,
+    "HeteroResp" = sub.sipnet.output$rSoil - sub.sipnet.output$rRoot,
+    "SoilResp" = sub.sipnet.output$rSoil,
+    "NEE" = sub.sipnet.output$nee,
+    "AbvGrndWood" = sub.sipnet.output$plantWoodC,
+    "leaf_carbon_content" = sub.sipnet.output$plantLeafC,
+    "litter_carbon_content" = sub.sipnet.output$litter,
+    "fine_root_carbon_content" = sub.sipnet.output$fineRootC,
+    "coarse_root_carbon_content" = sub.sipnet.output$coarseRootC,
+    "LAI" = sub.sipnet.output$plantLeafC * SLA,
+    "TotLivBiom" = sub.sipnet.output$plantWoodC +
+      sub.sipnet.output$plantLeafC +
+      sub.sipnet.output$coarseRootC +
+      sub.sipnet.output$fineRootC,
+    "TotSoilCarb" = sub.sipnet.output$soil + sub.sipnet.output$litter,
+    "AGB" = sub.sipnet.output$plantWoodC + sub.sipnet.output$plantLeafC,
+    "Qle" = sub.sipnet.output$evapotranspiration * PEcAn.data.atmosphere::get.lv(),
+    "Transp" = sub.sipnet.output$fluxestranspiration,
+    "SoilMoist" = sub.sipnet.output$soilWater,
+    "SoilMoistFrac" = sub.sipnet.output$soilWetnessFrac,
+    "SWE" = sub.sipnet.output$snow
+  )
+  
+  if ("litterWater" %in% names(sub.sipnet.output)) {
+    output[["litter_mass_content_of_water"]] <- sub.sipnet.output$litterWater
+  }
+  if ("woodCreation" %in% names(sub.sipnet.output)) {
+    output[["GWBI"]] <- sub.sipnet.output$woodCreation
+  }
+  if ("minN" %in% names(sub.sipnet.output)) {
+    output[["mineral_N"]] <- sub.sipnet.output$minN
+  }
+  if ("soilOrgN" %in% names(sub.sipnet.output)) {
+    output[["soil_organic_N"]] <- sub.sipnet.output$soilOrgN
+  }
+  if ("litterN" %in% names(sub.sipnet.output)) {
+    output[["litter_N"]] <- sub.sipnet.output$litterN
+  }
+  if ("n2o" %in% names(sub.sipnet.output)) {
+    output[["N2O_flux"]] <- sub.sipnet.output$n2o
+  }
+  if ("nLeaching" %in% names(sub.sipnet.output)) {
+    output[["N_leaching"]] <- sub.sipnet.output$nLeaching
+  }
+  if ("nFixation" %in% names(sub.sipnet.output)) {
+    output[["N_fixation"]] <- sub.sipnet.output$nFixation
+  }
+  if ("nUptake" %in% names(sub.sipnet.output)) {
+    output[["N_uptake"]] <- sub.sipnet.output$nUptake
+  }
+  if ("ch4" %in% names(sub.sipnet.output)) {
+    output[["CH4_flux"]] <- sub.sipnet.output$ch4
+  }
+  
+  output[["time_bounds"]] <- c(rbind(bounds[, 1], bounds[, 2]))
+  
+  # Dimensions
+  t <- ncdf4::ncdim_def(
+    name = "time",
+    longname = "time",
+    units = time_units,
+    vals = sub_dates_cf,
+    calendar = "standard",
+    unlim = TRUE
+  )
+  
+  lat <- ncdf4::ncdim_def(
+    name = "lat",
+    units = "degrees_north",
+    vals = as.numeric(sitelat),
+    longname = "station_latitude"
+  )
+  
+  lon <- ncdf4::ncdim_def(
+    name = "lon",
+    units = "degrees_east",
+    vals = as.numeric(sitelon),
+    longname = "station_longitude"
+  )
+  
+  dims <- list(lon = lon, lat = lat, time = t)
+  
+  time_interval <- ncdf4::ncdim_def(
+    name = "hist_interval",
+    longname = "history time interval endpoint dimensions",
+    vals = 1:2,
+    units = ""
+  )
+  
+  for (i in seq_along(output)) {
+    if (length(output[[i]]) == 0) {
+      output[[i]] <- rep(-999, length(t$vals))
+    }
+  }
+  
+  # NetCDF variables
+  nc_var <- list(
+    "GPP" = PEcAn.utils::to_ncvar("GPP", dims),
+    "NPP" = PEcAn.utils::to_ncvar("NPP", dims),
+    "TotalResp" = PEcAn.utils::to_ncvar("TotalResp", dims),
+    "AutoResp" = PEcAn.utils::to_ncvar("AutoResp", dims),
+    "HeteroResp" = PEcAn.utils::to_ncvar("HeteroResp", dims),
+    
+    "SoilResp" = ncdf4::ncvar_def(
+      "SoilResp",
+      units = "kg C m-2 s-1",
+      dim = list(lon, lat, t),
+      missval = -999,
+      longname = "Soil Respiration"
+    ),
+    
+    "NEE" = PEcAn.utils::to_ncvar("NEE", dims),
+    "AbvGrndWood" = PEcAn.utils::to_ncvar("AbvGrndWood", dims),
+    "leaf_carbon_content" = PEcAn.utils::to_ncvar("leaf_carbon_content", dims),
+    "TotLivBiom" = PEcAn.utils::to_ncvar("TotLivBiom", dims),
+    "TotSoilCarb" = PEcAn.utils::to_ncvar("TotSoilCarb", dims),
+    "Qle" = PEcAn.utils::to_ncvar("Qle", dims),
+    "Transp" = PEcAn.utils::to_ncvar("Transp", dims),
+    "SoilMoist" = PEcAn.utils::to_ncvar("SoilMoist", dims),
+    "SoilMoistFrac" = PEcAn.utils::to_ncvar("SoilMoistFrac", dims),
+    "SWE" = PEcAn.utils::to_ncvar("SWE", dims),
+    "litter_carbon_content" = PEcAn.utils::to_ncvar("litter_carbon_content", dims),
+    "LAI" = PEcAn.utils::to_ncvar("LAI", dims),
+    "fine_root_carbon_content" = PEcAn.utils::to_ncvar("fine_root_carbon_content", dims),
+    "coarse_root_carbon_content" = PEcAn.utils::to_ncvar("coarse_root_carbon_content", dims),
+    
+    "AGB" = ncdf4::ncvar_def(
+      "AGB",
+      units = "kg C m-2",
+      dim = list(lon, lat, t),
+      missval = -999,
+      longname = "Total aboveground biomass"
+    ),
+    
+    "time_bounds" = ncdf4::ncvar_def(
+      name = "time_bounds",
+      units = "",
+      longname = "history time interval endpoints",
+      dim = list(time_interval, time = t),
+      prec = "double"
+    )
+  )
+  
+  if ("litter_mass_content_of_water" %in% names(output)) {
+    nc_var[["litter_mass_content_of_water"]] <-
+      PEcAn.utils::to_ncvar("litter_mass_content_of_water", dims)
+  }
+  
+  if ("GWBI" %in% names(output)) {
+    nc_var[["GWBI"]] <- ncdf4::ncvar_def(
+      "GWBI",
+      units = "kg C m-2 s-1",
+      dim = list(lon, lat, t),
+      missval = -999,
+      longname = "Gross Woody Biomass Increment"
+    )
+  }
+  
+  if ("mineral_N" %in% names(output)) {
+    nc_var[["mineral_N"]] <- ncdf4::ncvar_def(
+      "mineral_N",
+      units = "kg N m-2",
+      dim = list(lon, lat, t),
+      missval = -999,
+      longname = "Soil mineral nitrogen"
+    )
+  }
+  
+  if ("soil_organic_N" %in% names(output)) {
+    nc_var[["soil_organic_N"]] <- ncdf4::ncvar_def(
+      "soil_organic_N",
+      units = "kg N m-2",
+      dim = list(lon, lat, t),
+      missval = -999,
+      longname = "Soil organic nitrogen"
+    )
+  }
+  
+  if ("litter_N" %in% names(output)) {
+    nc_var[["litter_N"]] <- ncdf4::ncvar_def(
+      "litter_N",
+      units = "kg N m-2",
+      dim = list(lon, lat, t),
+      missval = -999,
+      longname = "Litter nitrogen"
+    )
+  }
+  
+  if ("N2O_flux" %in% names(output)) {
+    nc_var[["N2O_flux"]] <- PEcAn.utils::to_ncvar("N2O_flux", dims)
+  }
+  
+  if ("N_leaching" %in% names(output)) {
+    nc_var[["N_leaching"]] <- ncdf4::ncvar_def(
+      "N_leaching",
+      units = "kg N m-2 s-1",
+      dim = list(lon, lat, t),
+      missval = -999,
+      longname = "Nitrogen leaching flux"
+    )
+  }
+  
+  if ("N_fixation" %in% names(output)) {
+    nc_var[["N_fixation"]] <- ncdf4::ncvar_def(
+      "N_fixation",
+      units = "kg N m-2 s-1",
+      dim = list(lon, lat, t),
+      missval = -999,
+      longname = "Nitrogen fixation flux"
+    )
+  }
+  
+  if ("N_uptake" %in% names(output)) {
+    nc_var[["N_uptake"]] <- ncdf4::ncvar_def(
+      "N_uptake",
+      units = "kg N m-2 s-1",
+      dim = list(lon, lat, t),
+      missval = -999,
+      longname = "Plant nitrogen uptake"
+    )
+  }
+  
+  if ("CH4_flux" %in% names(output)) {
+    nc_var[["CH4_flux"]] <- PEcAn.utils::to_ncvar("CH4_flux", dims)
+  }
+  
+  # Write NetCDF
+  nc <- ncdf4::nc_create(interval_nc_file, nc_var)
+  on.exit({
+    try(ncdf4::nc_close(nc), silent = TRUE)
+  }, add = TRUE)
+  
+  ncdf4::ncatt_put(nc, "time", "bounds", "time_bounds", prec = NA)
+  ncdf4::ncatt_put(nc, 0, "forecast_interval_start", as.character(interval_start))
+  ncdf4::ncatt_put(nc, 0, "forecast_interval_stop", as.character(interval_stop))
+  ncdf4::ncatt_put(nc, 0, "source_file", sipnet_out_file)
+  
+  for (key in names(nc_var)) {
+    ncdf4::ncvar_put(nc, nc_var[[key]], output[[key]])
+  }
+  
+  ncdf4::nc_close(nc)
+  
   if (delete.raw) {
     file.remove(sipnet_out_file)
   }
+  
+  invisible(interval_nc_file)
 } # model2netcdf.SIPNET
 #--------------------------------------------------------------------------------------------------#
 

@@ -39,7 +39,7 @@ settings$modeloutdir <- file.path(settings$outdir, "out")
 settings$host$rundir <- file.path(settings$outdir, "run")
 settings$host$outdir <- file.path(settings$outdir, "out")
 settings$host$folder <- file.path(settings$outdir, "out")
-settings$ensemble$size <- 25
+settings$ensemble$size <- 2
 settings$state.data.assimilation$adjustment <- "FALSE"
 settings$host$prerun <- "module load R/4.4.0"
 ###### Change Q type
@@ -119,8 +119,8 @@ control = list(
   forceRun = TRUE,
   run_parallel = FALSE,
   MCMC.args = list(
-    niter = 200000,   
-    nburnin = 100000,
+    niter = 200,   
+    nburnin = 100,
     nthin = 5,
     nchain = 3
   ),
@@ -143,8 +143,8 @@ res <- PEcAnAssimSequential:::sda.enkf_local(
     forceRun = TRUE,
     run_parallel = FALSE,
     MCMC.args = list(
-      niter = 200000,   
-      nburnin = 100000,
+      niter = 200,   
+      nburnin = 100,
       nthin = 5,
       nchain = 3
     ),

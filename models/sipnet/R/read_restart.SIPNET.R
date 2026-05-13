@@ -20,9 +20,35 @@ read_restart.SIPNET <- function (outdir, runid, stop.time, settings, var.names, 
   
   params$restart <- rep(NA, length(setdiff(state.vars, var.names)))
   names(params$restart) <- setdiff(state.vars, var.names)
-  ens <- PEcAn.utils::read.output(runid = runid, outdir = file.path(outdir, 
-                                                                    runid), start.year = lubridate::year(stop.time), end.year = lubridate::year(stop.time), 
-                                  variables = c(state.vars, "time_bounds"))
+  ## Revise
+  # ens <- PEcAn.utils::read.output(runid = runid, outdir = file.path(outdir, 
+  #                                                                   runid), start.year = lubridate::year(stop.time), end.year = lubridate::year(stop.time), 
+  #                                 variables = c(state.vars, "time_bounds"))
+  # Read monthly NetCDF directly (YYYY-MM.nc) instead of yearly read.output
+  ym <- format(as.Date(stop.time), "%Y-%m")
+  nc_path <- file.path(outdir, runid, paste0(ym, ".nc"))
+  if (!file.exists(nc_path)) {
+    stop("Monthly NetCDF not found for runid ", runid, ": ", nc_path, call. = FALSE)
+  }
+  
+  nc <- ncdf4::nc_open(nc_path)
+  on.exit(ncdf4::nc_close(nc), add = TRUE)
+  
+  getv <- function(v) {
+    if (!(v %in% names(nc$var))) return(NULL)
+    ncdf4::ncvar_get(nc, v)
+  }
+  
+  ens <- list()
+  for (v in c(state.vars, "time_bounds", "GWBI", "TotLivBiom", "leaf_carbon_content")) {
+    ens[[v]] <- getv(v)
+  }
+  
+  # keep behavior close to read.output: ensure missing vars are NULL
+  for (v in c(state.vars, "time_bounds")) {
+    if (!v %in% names(ens)) ens[[v]] <- NULL
+  }
+  ### Finish Revise
   
   # 4) 若关键变量缺失，直接给出可读的报错信息（避免在 ud_convert 里才崩）
   must_have <- c("AbvGrndWood","fine_root_carbon_content","coarse_root_carbon_content")
@@ -34,8 +60,9 @@ read_restart.SIPNET <- function (outdir, runid, stop.time, settings, var.names, 
          call. = FALSE)
   }
   
-  start.time <- as.Date(paste0(lubridate::year(stop.time), 
-                               "-01-01"))
+  # start.time <- as.Date(paste0(lubridate::year(stop.time), 
+  #                              "-01-01"))
+  start.time <- as.Date(paste0(ym, "-01"))
   time_var <- ens$time_bounds[1, ]
   real_time <- as.POSIXct(time_var * 3600 * 24, origin = start.time)
   last <- which(as.Date(real_time) == as.Date(stop.time))[length(which(as.Date(real_time) == 

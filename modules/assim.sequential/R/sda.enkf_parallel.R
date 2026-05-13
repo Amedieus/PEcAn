@@ -132,6 +132,7 @@ sda.enkf_local <- function(settings,
     }
   }
   obs.times <- obs.times.POSIX
+  first_stop <- lubridate::ymd_hms(obs.times[1], truncated = 3)
   read_restart_times <- c(lubridate::ymd_hms(start.cut, truncated = 3), obs.times)
   nt  <- length(obs.times) #sets length of for loop for Forecast/Analysis
   if (nt==0) PEcAn.logger::logger.severe('There has to be at least one Obs.')
@@ -182,11 +183,13 @@ sda.enkf_local <- function(settings,
           #   )
           # )
           split_args <- list(
+            # start.time = lubridate::ymd_hms(settings$run$site$met.start, truncated = 3),
+            # stop.time  = lubridate::ymd_hms(settings$run$site$met.end, truncated = 3),
             start.time = lubridate::ymd_hms(settings$run$site$met.start, truncated = 3),
-            stop.time  = lubridate::ymd_hms(settings$run$site$met.end, truncated = 3),
+            stop.time  = first_stop,
             inputs     = settings$run$inputs$met$path[[i]],
             outpath    = file.path(settings$outdir, "Extracted_met", settings$run$site$id),
-            overwrite  = FALSE
+            overwrite  = TRUE
           )
           if (settings$model$type != "SIPNET") {
             split_args <- c(list(settings = settings), split_args)
@@ -197,8 +200,10 @@ sda.enkf_local <- function(settings,
           )
           ### Finish Revise
           # changing the start and end date which will be used for model2netcdf.model
+          # settings$run$start.date <- lubridate::ymd_hms(settings$state.data.assimilation$start.date, truncated = 3)
+          # settings$run$end.date <- lubridate::ymd_hms(settings$state.data.assimilation$end.date, truncated = 3)
           settings$run$start.date <- lubridate::ymd_hms(settings$state.data.assimilation$start.date, truncated = 3)
-          settings$run$end.date <- lubridate::ymd_hms(settings$state.data.assimilation$end.date, truncated = 3)
+          settings$run$end.date   <- first_stop
         }
       } else{
         inputs.split <- inputs
@@ -239,6 +244,7 @@ sda.enkf_local <- function(settings,
   pre.states <- vector("list", length = length(var.names)) %>% purrr::set_names(var.names)
   # initialize the lists of forecasts for all time points.
   all.X <- vector("list", length = nt)
+  inputs.raw <- inputs
   for (t in 1:nt) {
     # initialize dat for saving memory usage.
     sda.outputs <- FORECAST <- enkf.params <- ANALYSIS <- ens_weights <- list()
@@ -254,7 +260,7 @@ sda.enkf_local <- function(settings,
       #-Splitting the input for the models that they don't care about the start and end time of simulations and they run as long as their met file.
       PEcAn.logger::logger.info("Splitting mets!")
       inputs.split <- 
-        furrr::future_pmap(list(conf.settings %>% `class<-`(c("list")), inputs, model), function(settings, inputs, model) {
+        furrr::future_pmap(list(conf.settings %>% `class<-`(c("list")), inputs.raw, model), function(settings, inputs, model) {
           # Loading the model package - this is required bc of the furrr
           library(paste0("PEcAn.",model), character.only = TRUE)
           inputs.split <- inputs

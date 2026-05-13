@@ -57,74 +57,6 @@ mergeNC <- function(
 #'
 #' @export
 #' @author Shawn Serbin, Michael Dietze
-#--------------------------------------------------------------------------------------------------#
-# Helper functions for interval-based SIPNET NetCDF
-#--------------------------------------------------------------------------------------------------#
-
-parse_sipnet_datetime <- function(x) {
-  if (inherits(x, "POSIXt")) {
-    return(as.POSIXct(x, tz = "UTC"))
-  }
-  
-  x <- as.character(x)
-  
-  out <- lubridate::ymd_hms(x, truncated = 3, tz = "UTC", quiet = TRUE)
-  
-  if (is.na(out)) {
-    out <- lubridate::ymd(x, tz = "UTC", quiet = TRUE)
-  }
-  
-  if (is.na(out)) {
-    stop("Cannot parse datetime: ", x, call. = FALSE)
-  }
-  
-  as.POSIXct(out, tz = "UTC")
-}
-
-
-sipnet_interval_tag <- function(x) {
-  x <- parse_sipnet_datetime(x)
-  format(x, "%Y%m%dT%H%M%S", tz = "UTC")
-}
-
-
-sipnet_interval_nc_name <- function(start_date, end_date) {
-  paste0(
-    sipnet_interval_tag(start_date),
-    "_to_",
-    sipnet_interval_tag(end_date),
-    ".nc"
-  )
-}
-
-
-sipnet2datetime <- function(year, doy, hour) {
-  
-  hr <- floor(hour)
-  minsec <- (hour - hr) * 60
-  minute <- floor(minsec)
-  sec <- (minsec - minute) * 60
-  
-  minute <- ifelse(sec == 60, minute + 1, minute)
-  sec <- ifelse(sec == 60, 0, sec)
-  
-  hr <- ifelse(minute == 60, hr + 1, hr)
-  minute <- ifelse(minute == 60, 0, minute)
-  
-  datetime <- strptime(
-    paste(year, doy, hr, minute, sec),
-    "%Y %j %H %M %S",
-    tz = "UTC"
-  )
-  
-  as.POSIXct(datetime, tz = "UTC")
-}
-
-
-#--------------------------------------------------------------------------------------------------#
-# Interval-based SIPNET output to NetCDF
-#--------------------------------------------------------------------------------------------------#
-
 model2netcdf.SIPNET <- function(outdir, sitelat, sitelon, start_date, end_date,
                                 delete.raw = FALSE, revision = NULL,
                                 prefix = "sipnet.out",
@@ -600,10 +532,68 @@ model2netcdf.SIPNET <- function(outdir, sitelat, sitelon, start_date, end_date,
   
   invisible(interval_nc_file)
 } # model2netcdf.SIPNET
-#--------------------------------------------------------------------------------------------------#
+#------------------------------------------------------------------------------------------------
+
+parse_sipnet_datetime <- function(x) {
+  if (inherits(x, "POSIXt")) {
+    return(as.POSIXct(x, tz = "UTC"))
+  }
+  
+  x <- as.character(x)
+  
+  out <- lubridate::ymd_hms(x, truncated = 3, tz = "UTC", quiet = TRUE)
+  
+  if (is.na(out)) {
+    out <- lubridate::ymd(x, tz = "UTC", quiet = TRUE)
+  }
+  
+  if (is.na(out)) {
+    stop("Cannot parse datetime: ", x, call. = FALSE)
+  }
+  
+  as.POSIXct(out, tz = "UTC")
+}
+
+
+sipnet_interval_tag <- function(x) {
+  x <- parse_sipnet_datetime(x)
+  format(x, "%Y%m%dT%H%M%S", tz = "UTC")
+}
+
+
+sipnet_interval_nc_name <- function(start_date, end_date) {
+  paste0(
+    sipnet_interval_tag(start_date),
+    "_to_",
+    sipnet_interval_tag(end_date),
+    ".nc"
+  )
+}
+
+
+sipnet2datetime <- function(year, doy, hour) {
+  
+  hr <- floor(hour)
+  minsec <- (hour - hr) * 60
+  minute <- floor(minsec)
+  sec <- (minsec - minute) * 60
+  
+  minute <- ifelse(sec == 60, minute + 1, minute)
+  sec <- ifelse(sec == 60, 0, sec)
+  
+  hr <- ifelse(minute == 60, hr + 1, hr)
+  minute <- ifelse(minute == 60, 0, minute)
+  
+  datetime <- strptime(
+    paste(year, doy, hr, minute, sec),
+    "%Y %j %H %M %S",
+    tz = "UTC"
+  )
+  
+  as.POSIXct(datetime, tz = "UTC")
+}
 
 # Helper Function 
-
 sipnet2datetime <- function(year, doy, hour){
   
   hr <- floor(hour)
